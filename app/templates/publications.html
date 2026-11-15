@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}关账发布{% endblock %}
+{% block body %}
+<main class="page">
+  <header class="page-head">
+    <h1>关账发布</h1>
+    <span class="page-meta">{{ publications|length }} 个版本</span>
+  </header>
+
+  <section class="panel">
+    <h2>截止时点</h2>
+    <p class="empty">
+      发布只冻结截止时点（含）之前已到并完成匹配的批次；截止后补录的流水、手续费与凭证
+      不改动已发布版本，只能在下次发布中体现。同一截止时点重试不会新增版本。
+    </p>
+    <form id="publish-form" class="import-form">
+      <label>截止时点（ISO-8601，缺时区按 Asia/Shanghai）
+        <input type="text" name="cutoff" placeholder="2026-03-31T18:00" required>
+      </label>
+      <div class="side-actions">
+        <button type="button" class="btn" data-action="preview">预览补录影响</button>
+        <button type="submit" class="btn">发布正式版本</button>
+      </div>
+    </form>
+    <div id="preview-box" class="panel" hidden></div>
+  </section>
+
+  {% if latest %}
+  <section class="panel">
+    <h2>当前正式版本</h2>
+    <dl class="manifest">
+      <dt>发布编号</dt><dd class="mono">{{ latest.publication_id }}</dd>
+      <dt>版本号</dt><dd class="mono">v{{ latest.version_no }}</dd>
+      <dt>来源批次</dt><dd class="mono">{{ latest.run_id }}</dd>
+      <dt>截止时点</dt><dd class="mono">{{ latest.cutoff_at|localdt }}</dd>
+      <dt>发布时间</dt><dd class="mono">{{ latest.published_at|localdt }}</dd>
+      <dt>状态</dt><dd class="state">{{ latest.status|status_label }}</dd>
+      <dt>报告摘要</dt><dd class="mono">{{ latest.report_sha256|shortsha }}</dd>
+      <dt>清单摘要</dt><dd class="mono">{{ latest.manifest_sha256|shortsha }}</dd>
+    </dl>
+    <div class="links">
+      <a class="btn" href="/api/publications/{{ latest.publication_id }}/report.csv">冻结报告 CSV</a>
+      <a class="btn" href="/api/publications/{{ latest.publication_id }}/manifest.json">冻结清单 JSON</a>
+      <a class="btn" href="/api/export/report.csv">导出（同版）</a>
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2>发布历史</h2>
+    <div class="table-wrap">
+      <table class="grid" id="publication-table">
+        <thead>
+          <tr>
+            <th>版本</th><th>发布编号</th><th>截止时点</th><th>来源批次</th>
+            <th>状态</th><th class="num">匹配组影响</th><th class="num">手续费变动</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for item in publications %}
+          <tr>
+            <td class="mono">v{{ item.version_no }}</td>
+            <td class="mono">{{ item.publication_id }}</td>
+            <td class="mono">{{ item.cutoff_at|localdt }}</td>
+            <td class="mono">{{ item.run_id|shortsha }}</td>
+            <td class="state">{{ item.status|status_label }}</td>
+            <td class="num mono">
+              +{{ item.impact_summary.match_groups_added }}
+              /−{{ item.impact_summary.match_groups_removed }}
+              /改{{ item.impact_summary.match_groups_changed }}
+            </td>
+            <td class="num mono">{{ item.impact_summary.bank_fee_delta }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if not publications %}<p class="empty">还没有发布版本。</p>{% endif %}
+    </div>
+  </section>
+</main>
+<script src="/static/publication.js" defer></script>
+{% endblock %}

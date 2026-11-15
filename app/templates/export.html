@@ -6,6 +6,21 @@
     <h1>导出</h1>
     <span class="page-meta">{{ summary.run_id or '无批次' }}</span>
   </header>
+  {% if publication and publication.status == 'published' %}
+  <section class="panel">
+    <h2>发布版本</h2>
+    <p class="empty">
+      下载文件取自关账发布的冻结快照，与差异归因页面同版：
+      <span class="mono">{{ publication.publication_id }}</span>
+      （v{{ publication.version_no }}，截止 {{ publication.cutoff_at|localdt }}）。
+      报告摘要 <span class="mono">{{ publication.report_sha256|shortsha }}</span>。
+    </p>
+    <div class="links">
+      <a class="btn" href="/api/publications/{{ publication.publication_id }}/report.csv">发布版报告</a>
+      <a class="btn" href="/api/publications/{{ publication.publication_id }}/manifest.json">发布版清单</a>
+    </div>
+  </section>
+  {% endif %}
   <section class="panel">
     <h2>文件</h2>
     <div class="links">

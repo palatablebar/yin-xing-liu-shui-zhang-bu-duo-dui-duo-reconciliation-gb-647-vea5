@@ -85,6 +85,22 @@ CREATE TABLE IF NOT EXISTS matches (
     ledger_signed TEXT NOT NULL DEFAULT '0'
 );
 CREATE INDEX IF NOT EXISTS idx_matches_run ON matches(run_id, tier);
+CREATE TABLE IF NOT EXISTS publications (
+    publication_id TEXT PRIMARY KEY,
+    version_no INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    cutoff_at TEXT NOT NULL,
+    published_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'publishing',
+    superseded_by TEXT NOT NULL DEFAULT '',
+    report_csv TEXT NOT NULL DEFAULT '',
+    manifest_json TEXT NOT NULL DEFAULT '',
+    report_sha256 TEXT NOT NULL DEFAULT '',
+    manifest_sha256 TEXT NOT NULL DEFAULT '',
+    impact_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_publications_version ON publications(version_no);
+CREATE INDEX IF NOT EXISTS idx_publications_run ON publications(run_id);
 """
 
 RUN_COLUMNS = (
@@ -310,3 +326,106 @@ class Store:
                     for m in matches
                 ],
             )
+
+    # ---------- 关账发布 ----------
+    @staticmethod
+    def _publication_row(row: sqlite3.Row) -> dict:
+        data = dict(row)
+        data["impact"] = json.loads(data.pop("impact_json") or "{}")
+        return data
+
+    def get_publication(self, publication_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM publications WHERE publication_id = ?", (publication_id,)
+            ).fetchone()
+        return self._publication_row(row) if row else None
+
+    def latest_publication(self) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM publications ORDER BY version_no DESC LIMIT 1"
+            ).fetchone()
+        return self._publication_row(row) if row else None
+
+    def list_publications(self, limit: int = 20) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM publications ORDER BY version_no DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [self._publication_row(row) for row in rows]
+
+    def save_publication(self, publication: dict) -> None:
+        """插入或覆盖一条发布记录；与读取快照不在同一事务时只做单行写入。"""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO publications (
+                    publication_id, version_no, run_id, cutoff_at, published_at, status,
+                    superseded_by, report_csv, manifest_json, report_sha256,
+                    manifest_sha256, impact_json
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    publication["publication_id"], publication["version_no"],
+                    publication["run_id"], publication["cutoff_at"],
+                    publication["published_at"], publication.get("status", "publishing"),
+                    publication.get("superseded_by", ""),
+                    publication.get("report_csv", ""),
+                    publication.get("manifest_json", ""),
+                    publication.get("report_sha256", ""),
+                    publication.get("manifest_sha256", ""),
+                    json.dumps(publication.get("impact", {}), ensure_ascii=False,
+                               sort_keys=True),
+                ),
+            )
+
+    def publish_transaction(self, publication: dict) -> None:
+        """关账发布的串行事务：抢写锁 → 幂等判定 → 旧版置 superseded → 写入新版。
+
+        同一 (run_id, cutoff_at) 重试时 publication_id 相同：
+        - 已发布（published）→ 直接返回旧记录，不新增版本、不重复计数；
+        - 残留 publishing（上次中断）→ 用同一份快照覆盖，版本号沿用；
+        - 不同 cutoff 的新发布 → 版本号 +1，并把上一版标记为 superseded。
+        返回应当回传给调用方的发布行（含最终状态）。
+        """
+        with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT * FROM publications WHERE publication_id = ?",
+                (publication["publication_id"],),
+            ).fetchone()
+            if existing is not None and existing["status"] == "published":
+                return self._publication_row(existing)
+            if existing is not None:
+                version_no = existing["version_no"]
+            else:
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(version_no), 0) AS max_version FROM publications"
+                ).fetchone()
+                version_no = row["max_version"] + 1
+            conn.execute(
+                "UPDATE publications SET superseded_by = ?, status = 'superseded' "
+                "WHERE status IN ('published', 'publishing')",
+                (publication["publication_id"],),
+            )
+            conn.execute(
+                """INSERT OR REPLACE INTO publications (
+                    publication_id, version_no, run_id, cutoff_at, published_at, status,
+                    superseded_by, report_csv, manifest_json, report_sha256,
+                    manifest_sha256, impact_json
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    publication["publication_id"], version_no,
+                    publication["run_id"], publication["cutoff_at"],
+                    publication["published_at"], publication.get("status", "published"),
+                    "",
+                    publication["report_csv"], publication["manifest_json"],
+                    publication["report_sha256"], publication["manifest_sha256"],
+                    json.dumps(publication.get("impact", {}), ensure_ascii=False,
+                               sort_keys=True),
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM publications WHERE publication_id = ?",
+                (publication["publication_id"],),
+            ).fetchone()
+            return self._publication_row(row)

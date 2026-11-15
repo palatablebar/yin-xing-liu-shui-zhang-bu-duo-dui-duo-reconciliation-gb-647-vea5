@@ -14,9 +14,10 @@ from .modules.m4_candidates import handler as m4_handler
 from .modules.m5_matching import handler as m5_handler
 from .modules.m6_diff import handler as m6_handler
 from .modules.m7_export import handler as m7_handler
+from .modules.m8_publication import handler as m8_handler
 
 MODULES = (m1_handler, m2_handler, m3_handler, m4_handler, m5_handler,
-           m6_handler, m7_handler)
+           m6_handler, m7_handler, m8_handler)
 
 
 def create_app(settings: config.Settings | None = None) -> FastAPI:
@@ -53,7 +54,7 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
         return Response(status_code=200, media_type="text/html; charset=utf-8")
 
     for path in ("/", "/quarantine", "/candidates", "/matches", "/batches", "/export",
-                 "/api/health"):
+                 "/publications", "/api/health"):
         app.add_api_route(path, _head_ok, methods=["HEAD"], include_in_schema=False)
 
     @app.exception_handler(ValueError)

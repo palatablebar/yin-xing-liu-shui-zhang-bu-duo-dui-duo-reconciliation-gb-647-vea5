@@ -22,6 +22,7 @@
 | M5 多对多求解 | 求解不重叠匹配组，看手续费分摊 | `POST /api/matches`、页面 `/matches` |
 | M6 差异与批次 | 看两侧守恒、差异归因与历史批次 | `GET /api/differences`、`GET /api/batches`、页面 `/batches` |
 | M7 报告导出 | 导出报告 CSV 与运行清单 JSON | `GET /api/export/report.csv`、`/api/export/manifest.json`、页面 `/export` |
+| M8 关账发布 | 定截止时点、预览补录影响、发布冻结版本，旧版完整保留 | `GET /api/publications/preview`、`POST /api/publications`、页面 `/publications` |
 
 ## 启动
 
@@ -54,13 +55,31 @@ docker compose exec -T app python -m pytest -q
 - `/matches` 匹配组。
 - `/batches` 对账与批次历史。
 - `/export` 导出。
+- `/publications` 关账发布：截止时点、补录影响预览、版本历史与冻结下载。
+
+## 关账发布
+
+月底关账时，手续费入账与凭证补录常在发布后才到，M8 用「截止时点 + 冻结版本」处理：
+
+```bash
+# 1. 预览：本次 cutoff 会发布哪个批次，相对上一版影响哪些匹配组、未匹配项与手续费
+curl -s "http://127.0.0.1:18206/api/publications/preview?cutoff=2026-03-31T18:00"
+# 2. 发布：冻结报告 CSV 与清单 JSON，版本号递增，旧版标 superseded 但完整保留
+curl -s -X POST http://127.0.0.1:18206/api/publications -d "cutoff=2026-03-31T18:00"
+# 3. 同版下载：导出接口在发布后直接回放冻结快照，与差异归因页面同版
+curl -s http://127.0.0.1:18206/api/export/report.csv
+```
+
+- cutoff 只认该时点（含）之前已到的最新已匹配批次；截止后的补录不进本版。
+- 同一 (run_id, cutoff) 重试得到同一 publication_id、同一版本号，不新增批次、不重复计数。
+- 发布中断只可能留下同 id 的 `publishing` 残留，重试原地修复；旧版文本不删除。
 
 ## 目录
 
 ```text
-app/            平台层与七个功能模块
-app/templates/  base + 六个页面
-app/static/     theme / layout / components + 三个脚本
+app/            平台层与八个功能模块
+app/templates/  base + 七个页面
+app/static/     theme / layout / components + 四个脚本
 docs/           DEPTH、DATA-DICTIONARY、RUNBOOK
 sample_data/    六份脏样例与一份空白样例
 tests/          模块测试、端到端、不变量

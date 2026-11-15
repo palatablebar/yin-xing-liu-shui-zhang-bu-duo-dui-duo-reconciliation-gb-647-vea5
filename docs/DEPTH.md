@@ -1,8 +1,8 @@
 # 深度登记 ledgerbank
 
-- 规模：中型（7 个功能模块 / 7 个页面 / 75 条测试）
+- 规模：中型（8 个功能模块 / 8 个页面 / 101 条测试）
 - 核心规则：方向相同、金额差 ≤ 0.02 元、日期差 ≤ 3 天的候选；一对一、一对多、多对一按层级与金额差确定性择一；多对一用最多 4 条的受限子集和；手续费单独计入银行侧并按最大余额法分摊。
-- 使用者与工作流：连锁零售财务共享组会计每月把 12 个账户的银行流水与账簿凭证放在一起核对；一笔付款拆多张凭证、多笔流水合并付一张发票，原先逐条手工比对，现在一次运行得到匹配组、未匹配清单、隔离证据与两侧守恒。
+- 使用者与工作流：连锁零售财务共享组会计每月把 12 个账户的银行流水与账簿凭证放在一起核对；一笔付款拆多张凭证、多笔流水合并付一张发票，原先逐条手工比对，现在一次运行得到匹配组、未匹配清单、隔离证据与两侧守恒。月底关账时出纳按截止时点发布冻结版本，发布后到的手续费与凭证补录只影响下一版，不改写已发报告。
 
 ## 功能模块
 
@@ -15,8 +15,9 @@
 | M5 多对多求解 | 求解不重叠匹配组，看手续费分摊 | POST /api/matches、页面 /matches | `app/modules/m5_matching/subset.py` `app/modules/m5_matching/fees.py` `app/modules/m5_matching/solve.py` | `tests/test_m5_matching.py` |
 | M6 差异与批次 | 看两侧守恒、差异归因与历史批次 | GET /api/differences、GET /api/batches、页面 /batches | `app/modules/m6_diff/differences.py` `app/modules/m6_diff/history.py` | `tests/test_m6_differences.py` |
 | M7 报告导出 | 导出报告 CSV 与运行清单 JSON | GET /api/export/report.csv、页面 /export | `app/modules/m7_export/csv_out.py` `app/modules/m7_export/manifest_out.py` | `tests/test_m7_export.py` |
+| M8 关账发布 | 定截止时点、预览补录影响、发布冻结版本并下载同版报告 | GET /api/publications/preview、POST /api/publications、页面 /publications | `app/modules/m8_publication/cutoff.py` `app/modules/m8_publication/impact.py` `app/modules/m8_publication/snapshot.py` `app/modules/m8_publication/service.py` | `tests/test_m8_publication.py` |
 
-端到端：`tests/test_e2e.py`（样例 → 采信 → 质量 → 候选 → 匹配 → 差异 → 导出，含 6 个页面 200、幂等重跑与失败输入恢复）；不变量：`tests/test_invariants.py`。
+端到端：`tests/test_e2e.py`（样例 → 采信 → 质量 → 候选 → 匹配 → 差异 → 导出，含 6 个页面 200、幂等重跑与失败输入恢复）；不变量：`tests/test_invariants.py`；关账发布：`tests/test_m8_publication.py`（截止时点、补录影响、冻结同版、中断恢复、并发幂等）。
 
 ## 陷阱登记
 
@@ -33,6 +34,9 @@
 | TRAP-19 | 同一对流水同时命中一对一与子集候选 | 结果取决于候选生成顺序 | 层级优先 + 金额差 + 日期差 + 业务号排序，输入顺序变化不影响结果 | `app/modules/m5_matching/subset.py` | `tests/test_m5_matching.py::test_result_independent_of_candidate_order` |
 | TRAP-23 | 日期差正好 3 天与 4 天；23:59:59 与次日 00:00 | 端点重复计入或跨日归错桶 | 本地日桶左闭右开 `[日初, 次日初)`；窗口按自然日差 ≤3 | `app/modules/m4_candidates/window.py` | `tests/test_m4_candidates.py::test_window_boundary_three_days_included` |
 | TRAP-24 | 手续费按比例分摊后合计差一分 | 各自四舍五入，分摊合计不等于实际合计 | 最大余额法分到 0.01 元，按组号确定性分配尾差 | `app/modules/m5_matching/fees.py` | `tests/test_m5_matching.py::test_fee_allocation_sums_to_actual` |
+| TRAP-25 | 关账发布后手续费才入账、凭证才补录 | 按当前文件重发，已发出的报告被静默改写 | 发布按 cutoff 锁定当时最新已匹配批次，报告与清单原文冻结落库，补录只能经新版本体现，旧版标 superseded 但完整保留 | `app/modules/m8_publication/cutoff.py` `app/modules/m8_publication/snapshot.py` | `tests/test_m8_publication.py::test_frozen_report_survives_later_supplement` |
+| TRAP-26 | 同一补录被出纳重试或双击发布 | 每点一次新增一个批次，报告被重复计数 | publication_id 由 run_id + cutoff 决定，`BEGIN IMMEDIATE` 串行事务内幂等判定，同 id 重试沿用原版本号，不新增行 | `app/store.py` `app/modules/m8_publication/ids.py` | `tests/test_m8_publication.py::test_retry_same_cutoff_keeps_single_publication`、`test_concurrent_identical_publishes_create_one_row` |
+| TRAP-27 | 发布过程中断，留下半个快照 | 下载到空文件，或旧版已被覆盖无法回退 | 快照文本与版本写入同一事务；残留只可能是同 id 的 publishing，期间导出回退实时数据，重试原地修复且旧版文本不删 | `app/store.py` `app/modules/m7_export/handler.py` | `tests/test_m8_publication.py::test_interrupted_publication_keeps_old_version_and_retries_in_place` |
 
 ## 对账规则
 
@@ -42,6 +46,15 @@
 - 手续费分摊合计 = 匹配组实际手续费合计。
 - 匹配差额 = 银行匹配金额 − 账簿匹配金额，容差 0.02 元内允许非 0，并在差异清单与页面显式列出。
 - 以上五账在 `/api/differences`、页面 `/batches` 与报告 CSV 中同时展示。
+- 关账发布后，`/api/differences`（默认 scope=published）、`/api/export/report.csv` 与 `/api/export/manifest.json` 都回放同一发布快照；需要工作区实时数字时显式传 `scope=workspace`。
+
+## 关账发布语义（M8）
+
+- 截止时点：`POST /api/publications` 必须带 ISO-8601 的 cutoff（无时区按 Asia/Shanghai）；只选 `created_at <= cutoff` 的最新 `matched` 批次，截止后到达的数据不进本版，没有合格批次返回 409。
+- 补录影响：预览以最近一次发布的来源批次为基准，列出匹配组（新增/消失/成员或手续费变动）、未匹配项（新出现/已消解）与手续费（补录/调整/合计差额），全部金额为 Decimal 字符串。
+- 版本：新 cutoff 发布版本号 +1，上一版置 `superseded` 并记录 `superseded_by`；cutoff 早于最近发布返回 `E_CUTOFF_REGRESS`，已发布版本不可回退。
+- 同版：冻结报告与清单复用 M7 导出函数生成，附 sha256；清单内嵌完整对账结论供差异接口回放。
+- 幂等：`publication_id = sha256(run_id | cutoff)`，同 id 重试不新增批次、不重复计数；并发发布由 `BEGIN IMMEDIATE` 串行化。
 
 ## 反例与不变量
 

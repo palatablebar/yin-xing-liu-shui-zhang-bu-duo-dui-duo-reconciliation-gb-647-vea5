@@ -15,6 +15,7 @@ from .modules.m5_matching.subset import TIER_NAMES
 from .modules.m6_diff import differences as differences_mod
 from .modules.m6_diff import history as history_mod
 from .modules.m7_export import service as export_service
+from .modules.m8_publication import service as publication_service
 
 TEMPLATE_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
@@ -27,6 +28,7 @@ NAV = (
     ("匹配", "/matches"),
     ("批次", "/batches"),
     ("导出", "/export"),
+    ("关账发布", "/publications"),
 )
 
 
@@ -85,6 +87,9 @@ STATUS_LABELS = {
     "partial_bank": "仅银行",
     "partial_ledger": "仅账簿",
     "empty": "空批次",
+    "published": "已发布",
+    "publishing": "发布中断",
+    "superseded": "已被新版替代",
 }
 
 TOTAL_LABELS = {
@@ -233,5 +238,21 @@ def setup(app: FastAPI) -> None:
             {"label": TOTAL_LABELS.get(key, key), "value": value}
             for key, value in summary.get("totals", {}).items()
         ]
-        context.update({"summary": summary, "total_rows": total_rows})
+        publication = store.latest_publication()
+        context.update({
+            "summary": summary,
+            "total_rows": total_rows,
+            "publication": publication,
+        })
         return render(request, "export.html", context)
+
+    @app.get("/publications")
+    def publications(request: Request):
+        store = request.app.state.store
+        context = base(request, "关账发布", "/publications")
+        context.update({
+            "publications": publication_service.listing(store)["publications"],
+            "latest": publication_service.latest(store),
+            "runs": store.list_runs(20),
+        })
+        return render(request, "publications.html", context)

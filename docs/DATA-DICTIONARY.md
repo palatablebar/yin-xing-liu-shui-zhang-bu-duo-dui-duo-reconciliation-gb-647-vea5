@@ -36,7 +36,16 @@
 
 - 行状态：`valid`（参与对账）、`quarantine`（隔离，附原因码）。
 - 批次状态：`partial_bank`、`partial_ledger`、`ready`、`matched`。
+- 发布状态：`publishing`（中断残留，重试原地修复）、`published`（当前正式版）、`superseded`（被新版替代，文本完整保留）。
 - 原因码表在 `app/reasons.py`，页面、CSV 与清单共用同一份名称。
+
+## 关账发布
+
+- `publication_id = "pub-" + sha256(run_id + "|" + cutoff_at)` 前 16 位；同批次同 cutoff 重试命中同一行，版本号不变。
+- cutoff 统一归一化为 UTC ISO-8601 字符串；选批规则是 `status == matched` 且 `created_at <= cutoff` 的最新批次。
+- 发布行内冻结报告 CSV、清单 JSON 原文与各自 sha256；清单另嵌完整 `reconciliation`（含 totals、counts、identities、differences），金额均为十进制字符串。
+- 补录影响以最近发布的来源批次为基准：匹配组按 `match_id` 对齐（added/removed/changed），未匹配项按 `(side, txn_no)` 对齐（newly_unmatched/resolved），手续费按银行流水号对齐（fee_added/fee_changed）。
+- 版本号由 `MAX(version_no)+1` 在同一 `BEGIN IMMEDIATE` 事务内分配；旧版写入 `superseded_by` 后不删数据。
 
 ## 运行清单
 

@@ -9,9 +9,12 @@ router = APIRouter(tags=["差异"])
 
 
 @router.get("/api/differences")
-def get_differences(request: Request):
+def get_differences(request: Request, scope: str = "published"):
     store = request.app.state.store
-    return service.payload(store, store.latest_run(), request.app.state.settings)
+    if scope not in ("published", "workspace"):
+        scope = "published"
+    return service.payload(store, store.latest_run(),
+                           request.app.state.settings, scope=scope)
 
 
 @router.get("/api/batches")
@@ -21,4 +24,5 @@ def get_batches(request: Request):
 
 @router.get("/api/batches/{run_id}")
 def get_batch(request: Request, run_id: str):
-    return service.batch_detail(request.app.state.store, run_id, request.app.state.settings)
+    return service.batch_detail(request.app.state.store, run_id,
+                                request.app.state.settings)
